@@ -102,14 +102,14 @@ class NavigationController {
     _isNavigating = false;   // No navegando aún
     _isWaitingForConfirmation = true; // Esperando confirmación
     
-    String confirmationText = "He encontrado una ruta con ${steps.length} intrucciones. Comenzaremos la navegación paso a paso en cuanto confirme diciendo 'Comenzar navegación'.";
+    String confirmationText = "He encontrado una ruta con ${steps.length} instrucciones. Comenzaremos la navegación paso a paso en cuanto confirme diciendo 'Comenzar navegación'.";
     
     debugPrint("Solicitando confirmación de navegación: $confirmationText");
     onStateUpdate?.call(confirmationText);
     
     _safeSetSpeaking(voiceProvider, true);
     
-    Timer? confirmationTimeout = Timer(const Duration(seconds: 15), () {
+    Timer? confirmationTimeout = Timer(const Duration(seconds: 5), () {
       debugPrint("TIMEOUT: El speech de confirmación se demoró demasiado");
       _safeSetSpeaking(voiceProvider, false);
       _startListeningForConfirmation(voiceProvider);
@@ -203,7 +203,7 @@ class NavigationController {
     
     _safeSetSpeaking(voiceProvider, true);
     
-    Timer? cancelTimeout = Timer(const Duration(seconds: 10), () {
+    Timer? cancelTimeout = Timer(const Duration(seconds: 5), () {
       debugPrint("TIMEOUT: El speech de cancelación se demoró demasiado");
       _safeSetSpeaking(voiceProvider, false);
       _tryAutoStartListening(voiceProvider);
@@ -245,7 +245,7 @@ class NavigationController {
       
       _safeSetSpeaking(voiceProvider, true);
       
-      Timer? errorTimeout = Timer(const Duration(seconds: 10), () {
+      Timer? errorTimeout = Timer(const Duration(seconds: 5), () {
         debugPrint("TIMEOUT: El speech de error en confirmación se demoró demasiado");
         _safeSetSpeaking(voiceProvider, false);
         _startListeningForConfirmation(voiceProvider);
@@ -290,7 +290,7 @@ class NavigationController {
     
     _safeSetSpeaking(voiceProvider, true);
     
-    Timer? speechTimeout = Timer(const Duration(seconds: 15), () {
+    Timer? speechTimeout = Timer(const Duration(seconds: 5), () {
       debugPrint("TIMEOUT: El speech se demoró demasiado");
       _safeSetSpeaking(voiceProvider, false);
       _askToContinueNavigation(voiceProvider);
@@ -333,7 +333,7 @@ class NavigationController {
       
       _safeSetSpeaking(voiceProvider, true);
       
-      Timer? continueTimeout = Timer(const Duration(seconds: 8), () {
+      Timer? continueTimeout = Timer(const Duration(seconds: 3), () {
         debugPrint("TIMEOUT: El speech de continuación se demoró demasiado");
         _safeSetSpeaking(voiceProvider, false);
         _startListeningAfterSpeech(voiceProvider);
@@ -428,7 +428,7 @@ class NavigationController {
     
     _safeSetSpeaking(voiceProvider, true);
     
-    Timer? completionTimeout = Timer(const Duration(seconds: 15), () {
+    Timer? completionTimeout = Timer(const Duration(seconds: 6), () {
       debugPrint("TIMEOUT: El speech de completación se demoró demasiado");
       _safeSetSpeaking(voiceProvider, false);
       _tryAutoStartListening(voiceProvider);
@@ -457,7 +457,7 @@ class NavigationController {
     
     _safeSetSpeaking(voiceProvider, true);
     
-    Timer? cancelTimeout = Timer(const Duration(seconds: 10), () {
+    Timer? cancelTimeout = Timer(const Duration(seconds: 5), () {
       debugPrint("TIMEOUT: El speech de cancelación se demoró demasiado");
       _safeSetSpeaking(voiceProvider, false);
       _tryAutoStartListening(voiceProvider);
@@ -502,7 +502,7 @@ class NavigationController {
       
       _safeSetSpeaking(voiceProvider, true);
       
-      Timer? errorTimeout = Timer(const Duration(seconds: 10), () {
+      Timer? errorTimeout = Timer(const Duration(seconds: 5), () {
         debugPrint("TIMEOUT: El speech de error se demoró demasiado");
         _safeSetSpeaking(voiceProvider, false);
         _startListeningAfterSpeech(voiceProvider);
@@ -527,7 +527,7 @@ class NavigationController {
     
     _safeSetSpeaking(voiceProvider, true);
     
-    Timer? directionTimeout = Timer(const Duration(seconds: 10), () {
+    Timer? directionTimeout = Timer(const Duration(seconds: 5), () {
       debugPrint("TIMEOUT: El speech de dirección se demoró demasiado");
       _safeSetSpeaking(voiceProvider, false);
       _startListeningAfterSpeech(voiceProvider);
@@ -548,7 +548,7 @@ class NavigationController {
       return;
     }
     
-    _compassTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+    _compassTimer = Timer.periodic(const Duration(seconds:3), (timer) {
       if (!_isNavigating) {
         debugPrint("Deteniendo actualizaciones de brújula - navegación no activa");
         timer.cancel();

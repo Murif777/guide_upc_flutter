@@ -5,8 +5,8 @@ import 'package:http/http.dart' as http;
 
 class UserService {
   final String _baseUrl = kDebugMode 
-      ? 'http://192.168.1.6:8080'
-      : 'http://192.168.1.6:8080';
+      ? 'http://192.168.1.2:8080'
+      : 'http://192.168.1.2:8080';
 
   Future<void> sendTelegramNotification(String location) async {
     try {
