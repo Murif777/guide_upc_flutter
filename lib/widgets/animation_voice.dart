@@ -126,12 +126,17 @@ class _AnimationVoiceState extends State<AnimationVoice>
                           final baseHeight = _baseSizes[index];
                           final animatedHeight = baseHeight * _barAnimations[index].value;
                           
+                          // FIX: Clamp el valor de opacidad entre 0.0 y 1.0
+                          final opacityValue = voiceProvider.isSpeaking 
+                            ? (0.8 + 0.2 * _barAnimations[index].value).clamp(0.0, 1.0)
+                            : 0.3;
+                          
                           return Container(
                             width: 4,
                             height: animatedHeight * 2, // Multiplicamos para mayor visibilidad
                             decoration: BoxDecoration(
                               color: voiceProvider.isSpeaking 
-                                ? _barColor.withOpacity(0.8 + 0.2 * _barAnimations[index].value)
+                                ? _barColor.withOpacity(opacityValue)
                                 : _barColor.withOpacity(0.3),
                               borderRadius: BorderRadius.circular(2),
                               boxShadow: voiceProvider.isSpeaking ? [
@@ -170,13 +175,16 @@ class _AnimationVoiceState extends State<AnimationVoice>
                   AnimatedBuilder(
                     animation: _animationController,
                     builder: (context, child) {
+                      // FIX: También aplicar clamp aquí por seguridad
+                      final pulseOpacity = (0.3 * (1 - _animationController.value)).clamp(0.0, 1.0);
+                      
                       return Container(
                         width: 120 + (20 * _animationController.value),
                         height: 120 + (20 * _animationController.value),
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: _barColor.withOpacity(0.3 * (1 - _animationController.value)),
+                            color: _barColor.withOpacity(pulseOpacity),
                             width: 2,
                           ),
                         ),

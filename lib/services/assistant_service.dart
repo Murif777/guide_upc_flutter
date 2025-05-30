@@ -8,7 +8,7 @@ class AssistantService {
 
   Future<String> enviarConsulta(String texto) async {
     try {
-      final url = 'http://192.168.1.6:8080/api/ia-navegacion/consulta';
+      final url = 'http://192.168.1.2:8080/api/ia-navegacion/consulta';
       debugPrint('Enviando consulta a: $url');
       debugPrint('Texto: $texto');
       

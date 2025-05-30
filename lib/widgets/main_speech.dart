@@ -1,11 +1,15 @@
+// main_speech.dart (Updated for auto TTS stop)
 import 'package:flutter/material.dart';
 import 'package:guide_upc_f/providers/voice_provider.dart';
 import 'package:guide_upc_f/services/assistant_service.dart';
 import 'package:guide_upc_f/services/speech_service.dart';
 import 'package:guide_upc_f/services/user_service.dart';
+import 'package:guide_upc_f/services/compass_service.dart';
 import 'package:guide_upc_f/widgets/camera_widget.dart';
+import 'package:guide_upc_f/controllers/navigation_controller.dart';
+import 'package:guide_upc_f/controllers/user_controller.dart';
+import 'package:guide_upc_f/controllers/query_processor.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class MainSpeech extends StatefulWidget {
   const MainSpeech({super.key});
@@ -15,37 +19,138 @@ class MainSpeech extends StatefulWidget {
 }
 
 class _MainSpeechState extends State<MainSpeech> {
+  // Services
   final AssistantService _assistantService = AssistantService();
   final SpeechService _speechService = SpeechService();
   final UserService _userService = UserService();
+  final CompassService _compassService = CompassService();
   
+  // Controllers
+  late NavigationController _navigationController;
+  late UserController _userController;
+  late QueryProcessor _queryProcessor;
+  
+  // State variables
   String _responseText = "Presiona el botón para iniciar";
-  String _userName = "";
-  bool _showNameInput = false;
   bool _showCamera = false;
   bool _appInitialized = false;
-  String _lastProcessedText = ""; // Para evitar procesar el mismo texto múltiples veces
+  String _lastProcessedText = "";
 
   @override
   void initState() {
     super.initState();
+    _initializeControllers();
     _setupVoiceListener();
+    _initializeCompass();
+    _setupTtsCallback(); // Nuevo método para configurar callback de TTS
+  }
+
+  void _initializeControllers() {
+    _navigationController = NavigationController(
+      compassService: _compassService,
+      speechService: _speechService,
+      onNavigationComplete: _onNavigationComplete,
+      onStateUpdate: _updateResponseText,
+    );
+
+    _userController = UserController(
+      speechService: _speechService,
+      userService: _userService,
+      onStateUpdate: _updateResponseText,
+      onShowNameInput: _setShowNameInput,
+    );
+
+    _queryProcessor = QueryProcessor(
+      assistantService: _assistantService,
+      speechService: _speechService,
+      navigationController: _navigationController,
+      userController: _userController,
+      onStateUpdate: _updateResponseText,
+    );
+
+    _navigationController.initialize();
+  }
+
+  // Nuevo método para configurar el callback de finalización de TTS
+  void _setupTtsCallback() {
+    _speechService.setTtsCompleteCallback(() {
+      debugPrint("=== TTS ha terminado completamente ===");
+      
+      // Usar addPostFrameCallback para asegurar que el contexto esté disponible
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          final voiceProvider = Provider.of<VoiceProvider>(context, listen: false);
+          
+          debugPrint("Estado actual del VoiceProvider:");
+          debugPrint("- isSpeaking: ${voiceProvider.isSpeaking}");
+          debugPrint("- isListening: ${voiceProvider.isListening}");
+          debugPrint("- TTS Service isSpeaking: ${_speechService.isSpeaking()}");
+          
+          // Cambiar el estado del botón automáticamente
+          if (voiceProvider.isSpeaking) {
+            debugPrint("Deteniendo modo speaking del botón automáticamente");
+            voiceProvider.setIsSpeaking(false);
+            
+            // Auto-iniciar escucha después de un pequeño delay si no estamos en navegación
+            if (!_navigationController.isNavigating && 
+                !_navigationController.isWaitingForConfirmation && 
+                !_userController.showNameInput) {
+              
+              Future.delayed(const Duration(milliseconds: 500), () {
+                if (mounted && !voiceProvider.isListening && !voiceProvider.isSpeaking) {
+                  debugPrint("Auto-iniciando escucha después del TTS");
+                  voiceProvider.startListening();
+                }
+              });
+            }
+          }
+        }
+      });
+    });
+  }
+
+  void _updateResponseText(String text) {
+    if (mounted) {
+      setState(() {
+        _responseText = text;
+      });
+    }
+  }
+
+  void _setShowNameInput(bool show) {
+    debugPrint("Show name input: $show");
+  }
+
+  void _onNavigationComplete() {
+    debugPrint("Navegación completada - callback ejecutado");
+  }
+
+  void _initializeCompass() async {
+    try {
+      await _compassService.initialize();
+      
+      bool isAvailable = await _compassService.checkCompassAvailability();
+      
+      if (isAvailable) {
+        debugPrint("Brújula inicializada correctamente");
+      } else {
+        debugPrint("Brújula no disponible en este dispositivo");
+      }
+    } catch (e) {
+      debugPrint("Error al inicializar brújula: $e");
+    }
   }
 
   void _setupVoiceListener() {
-    // Add post-frame callback to access the provider after build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final voiceProvider = Provider.of<VoiceProvider>(context, listen: false);
-      
-      // Add listener for continuous monitoring
       voiceProvider.addListener(_onVoiceProviderChanged);
       
-      // Check if button has been pressed to initialize the app
       if (voiceProvider.isButtonPressed && !_appInitialized) {
         setState(() {
           _appInitialized = true;
         });
-        _checkFirstTimeUser();
+        _userController.checkFirstTimeUser(voiceProvider);
       }
     });
   }
@@ -53,308 +158,249 @@ class _MainSpeechState extends State<MainSpeech> {
   void _onVoiceProviderChanged() {
     final voiceProvider = Provider.of<VoiceProvider>(context, listen: false);
     
-    // Check if we have new transcribed text, app is initialized, and we just stopped listening
+    // Procesar el texto cuando se detiene la escucha Y hay texto transcrito
     if (voiceProvider.transcribedText.isNotEmpty && 
         _appInitialized && 
         voiceProvider.transcribedText != _lastProcessedText &&
-        !voiceProvider.isListening && // Only process when not actively listening
-        !voiceProvider.isSpeaking) { // Don't process while the assistant is speaking
+        !voiceProvider.isListening &&
+        !voiceProvider.isSpeaking) {
       
       final text = voiceProvider.transcribedText;
-      _lastProcessedText = text; // Remember this text to avoid reprocessing
-      
+      _lastProcessedText = text;
 
-      
-      // Small delay for better UX, then process automatically
-      Future.delayed(const Duration(milliseconds: 300), () {
-        _handleVoiceSubmit(text);
-        voiceProvider.resetTranscription();
-        _lastProcessedText = ""; // Reset after processing
-      });
+      _handleVoiceSubmit(text);
+      voiceProvider.resetTranscription();
+      _lastProcessedText = "";
     }
     
-    // Check if button was just pressed to initialize
     if (voiceProvider.isButtonPressed && !_appInitialized) {
       setState(() {
         _appInitialized = true;
       });
-      _checkFirstTimeUser();
+      _userController.checkFirstTimeUser(voiceProvider);
     }
   }
 
   @override
   void dispose() {
-    // Remove the listener to prevent memory leaks
     final voiceProvider = Provider.of<VoiceProvider>(context, listen: false);
     voiceProvider.removeListener(_onVoiceProviderChanged);
+    _navigationController.dispose();
+    _compassService.dispose();
     super.dispose();
   }
 
-  Future<void> _checkFirstTimeUser() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final storedName = prefs.getString('userName');
-      
-      if (storedName != null) {
-        // Not first time, give personalized welcome
-        setState(() {
-          _userName = storedName;
-          _responseText = "Bienvenido $_userName. ¿Qué te gustaría hacer hoy?";
-        });
-        _speakWithStateTracking(_responseText);
-      } else {
-        // First time, ask for name
-        setState(() {
-          _showNameInput = true;
-          _responseText = "Bienvenido a guide UPC. ¿Cuál es tu nombre?";
-        });
-        _speakWithStateTracking(_responseText);
-      }
-    } catch (error) {
-      debugPrint("Error al verificar el usuario: $error");
-      setState(() {
-        _responseText = "Bienvenido a guide UPC";
-      });
-      _speakWithStateTracking(_responseText);
-    }
-  }
-
-  void _speakWithStateTracking(String text) {
-    final voiceProvider = Provider.of<VoiceProvider>(context, listen: false);
-    voiceProvider.setIsSpeaking(true);
-    
-    _speechService.speakText(text, () {
-      voiceProvider.setIsSpeaking(false);
-    });
-  }
-
-  Future<void> _saveName(String nameToSave) async {
-    if (nameToSave.trim().isEmpty) {
-      const errorMsg = "Campo vacío. Por favor ingresa tu nombre.";
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Por favor ingresa tu nombre")),
-      );
-      _speakWithStateTracking(errorMsg);
-      return;
-    }
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('userName', nameToSave.trim());
-      
-      setState(() {
-        _userName = nameToSave.trim();
-        _showNameInput = false;
-        _responseText = "Hola $_userName, bienvenido a guide UPC, una aplicacion en la que podras: "
-            "Pedir descripciones de lugares, Buscar la ruta mas optima a tu destino señalando lugar de origen y destino, "
-            "pedir ayuda a una persona si lo necesitas, entre otras cosas. ¿Qué gustaría hacer hoy?";
-      });
-      
-      _speakWithStateTracking(_responseText);
-      Provider.of<VoiceProvider>(context, listen: false).setInputText("");
-    } catch (error) {
-      debugPrint("Error al guardar el nombre: $error");
-      const errorMsg = "No se pudo guardar tu nombre";
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(errorMsg)),
-      );
-      _speakWithStateTracking(errorMsg);
-    }
-  }
-
-
-
   Future<void> _handleVoiceSubmit(String voiceText) async {
-    // Si estamos pidiendo el nombre, guardar el nombre
-    if (_showNameInput) {
-      await _saveName(voiceText);
+    final voiceProvider = Provider.of<VoiceProvider>(context, listen: false);
+
+    debugPrint("=== _handleVoiceSubmit llamado con: '$voiceText' ===");
+
+    // Prioridad 1: Si se está solicitando nombre de usuario
+    if (_userController.showNameInput) {
+      await _userController.saveName(voiceText, voiceProvider, context);
       return;
     }
 
-    // Si no estamos pidiendo el nombre, procesar como consulta normal
-    await _processQuery(voiceText);
-  }
-
-  String _checkForKeywords(String response) {
-    const keywords = ["}"];
-    final lowerCaseResponse = response.toLowerCase();
-
-    // Check if any keyword is in the response
-    final containsKeyword = keywords.any((keyword) => lowerCaseResponse.contains(keyword));
-
-    if (containsKeyword) {
-      return "$response Para una mejor navegación por el campus, busca un punto de referencia y di la frase \"Usar cámara\".";
-    }
-
-    return response;
-  }
-
-  bool _handleSpecialQueries(String query) {
-    final lowerCaseQuery = query.toLowerCase();
-    
-    if (lowerCaseQuery.contains("usar cámara")) {
-      _openCamera();
-      return true;
-    }
-
-    if (lowerCaseQuery.contains("ayuda")) {
-      _pedirAyuda();
-      return true;
-    }
-
-    // New functionality: Change name
-    const changeNamePatterns = [
-      "cambiar nombre", 
-      "cambiar mi nombre", 
-      "quiero cambiar mi nombre", 
-      "modifica mi nombre", 
-      "actualiza mi nombre"
-    ];
-    
-    final shouldChangeName = changeNamePatterns.any((pattern) => lowerCaseQuery.contains(pattern));
-    
-    if (shouldChangeName) {
-      _promptForNameChange();
-      return true;
-    }
-
-    return false;
-  }
-
-  void _promptForNameChange() {
-    setState(() {
-      _showNameInput = true;
-      _responseText = "Por favor, dime tu nuevo nombre";
-    });
-    
-    _speakWithStateTracking(_responseText);
-    
-    // Clear previous transcription to avoid interference
-    Provider.of<VoiceProvider>(context, listen: false).resetTranscription();
-  }
-
-  void _pedirAyuda() {
-    _speakWithStateTracking("No te preocupes y manten la calma, la ayuda está en camino a tu ubicación.");
-    _userService.sendLocationHelp();
-  }
-
-  Future<void> _processQuery(String query) async {
-    if (query.trim().isEmpty) {
-      const emptyMsg = "Por favor ingresa tu consulta";
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(emptyMsg)),
-      );
-      _speakWithStateTracking(emptyMsg);
+    // Prioridad 2: Si está esperando confirmación para iniciar navegación
+    if (_navigationController.isWaitingForConfirmation) {
+      _navigationController.handleConfirmationCommand(voiceText, voiceProvider);
       return;
     }
 
-    // Check if the query contains special phrases
-    final handled = _handleSpecialQueries(query);
-    if (handled) {
+    // Prioridad 3: Si está navegando activamente (paso a paso)
+    if (_navigationController.isNavigating) {
+      _navigationController.handleNavigationCommand(voiceText, voiceProvider);
       return;
     }
 
-    setState(() {
-      _responseText = "Procesando...";
-    });
-
-    try {
-      final response = await _assistantService.enviarConsulta(query);
-
-      // Check keywords and modify the response if necessary
-      final modifiedResponse = _checkForKeywords(response);
-
-      setState(() {
-        _responseText = modifiedResponse;
-      });
-
-      // Speak the response and update the state
-      _speakWithStateTracking(modifiedResponse);
-
-      // Clear the provider after sending
-      Provider.of<VoiceProvider>(context, listen: false).setInputText("");
-    } catch (error) {
-      debugPrint("Error en la consulta: $error");
-      const errorMessage = "Error al procesar la consulta.";
-      setState(() {
-        _responseText = errorMessage;
-      });
-      _speakWithStateTracking(errorMessage);
-    }
+    // Prioridad 4: Consulta general
+    await _queryProcessor.processQuery(voiceText, voiceProvider, context);
   }
-
-  void _openCamera() {
-    setState(() {
-      _responseText = "Abriendo la cámara...";
-      _showCamera = true;
-    });
-    _speakWithStateTracking("Abriendo la cámara...");
-  }
-
+  
   @override
   Widget build(BuildContext context) {
-    // Conditional rendering
     if (_showCamera) {
       return const CameraWidget();
     }
 
     return Consumer<VoiceProvider>(
       builder: (context, voiceProvider, child) {
-        return Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                _responseText,
-                style: const TextStyle(
-                  fontSize: 18,
-                  color: Colors.white,
-                ),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                semanticsLabel: "Respuesta del asistente: $_responseText",
-              ),
-              
-              const SizedBox(height: 16),
-              
-              voiceProvider.isListening
-                  ? Container(
-                      height: 40,
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(4),
+        return SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Área de respuesta del asistente
+                Container(
+                  height: 120,
+                  width: double.infinity,
+                  child: SingleChildScrollView(
+                    child: Text(
+                      _responseText,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Colors.white,
                       ),
-                      child: Center(
-                        child: Text(
-                          voiceProvider.partialResults.isNotEmpty 
-                              ? 'Escuchando: "${voiceProvider.partialResults[0]}"'
-                              : 'Escuchando...',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    )
-                  : const SizedBox(height: 40),
-              
-              const SizedBox(height: 16),
-              
-              if (voiceProvider.isSpeaking)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8.0),
-                  child: Text(
-                    "Procesando consulta...",
-                    style: TextStyle(
-                      color: Colors.orange,
-                      fontStyle: FontStyle.italic,
+                      textAlign: TextAlign.center,
+                      semanticsLabel: "Respuesta del asistente: $_responseText",
                     ),
                   ),
                 ),
-            ],
+                
+                const SizedBox(height: 16),
+                
+                // Indicador de confirmación de navegación
+                if (_navigationController.isWaitingForConfirmation) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.yellow.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.yellow.withOpacity(0.5)),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text(
+                          "⏳ Esperando Confirmación",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          "Diga 'comenzar navegación' para iniciar",
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                
+                // Indicador de navegación activa
+                if (_navigationController.isNavigating) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.blue.withOpacity(0.5)),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text(
+                          "🧭 Navegación Activa",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          "Paso ${_navigationController.currentStepIndex + 1} de ${_navigationController.navigationSteps.length}",
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                        if (_navigationController.currentDirection.isNotEmpty && _compassService.isCompassAvailable()) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            "Dirección: ${_navigationController.currentDirection}",
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                
+                // Área de estado de escucha
+                Container(
+                  height: 40,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: voiceProvider.isListening 
+                        ? Colors.blue.withOpacity(0.3)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Center(
+                    child: voiceProvider.isListening
+                        ? Text(
+                            voiceProvider.partialResults.isNotEmpty 
+                                ? 'Escuchando: "${voiceProvider.partialResults[0]}"'
+                                : 'Escuchando...',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          )
+                        : null,
+                  ),
+                ),
+                
+                const SizedBox(height: 16),
+                
+                // Indicador de reproducción de voz (con información adicional de debug)
+                if (voiceProvider.isSpeaking)
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Column(
+                      children: [
+                        const Text(
+                          "🔊 Reproduciendo respuesta...",
+                          style: TextStyle(
+                            color: Colors.orange,
+                            fontStyle: FontStyle.italic,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          "TTS Service: ${_speechService.isSpeaking() ? 'Activo' : 'Inactivo'}",
+                          style: const TextStyle(
+                            color: Colors.orange,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // Botón para activar cámara (solo si no está en navegación o confirmación)
+                const SizedBox(height: 16),
+                
+                if (!_navigationController.isNavigating && 
+                    !_navigationController.isWaitingForConfirmation && 
+                    !_userController.showNameInput)
+                  ElevatedButton(
+                    onPressed: () {
+                      setState(() {
+                        _showCamera = true;
+                      });
+                    },
+                    child: const Text("Usar Cámara"),
+                  ),
+              ],
+            ),
           ),
         );
       },
